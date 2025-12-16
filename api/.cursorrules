@@ -1,0 +1,186 @@
+# Regras do Projeto - Webhook Inspector API
+
+## Stack Tecnológica
+- **Runtime**: Node.js com TypeScript
+- **Framework**: Fastify com TypeScript
+- **ORM**: Drizzle ORM com PostgreSQL
+- **Validação**: Zod
+- **Formatação/Linting**: Biome
+- **Gerenciador de Pacotes**: pnpm
+
+## Estrutura do Projeto
+
+### Organização de Arquivos
+- Rotas devem estar em `src/routes/` como plugins Fastify
+- Schemas do banco de dados em `src/db/schema/`
+- Configurações de ambiente em `src/env.ts`
+- Migrações em `src/db/migrations/`
+
+### Path Aliases
+- Sempre use `@/*` para importar de `src/*`
+- Exemplo: `import { db } from '@/db'` ao invés de `import { db } from '../db'`
+
+## Padrões de Código
+
+### TypeScript
+- Use TypeScript strict mode
+- Sempre tipar funções, parâmetros e retornos
+- Use `type` para tipos e `interface` apenas quando necessário para extensão
+- Prefira `async/await` sobre Promises encadeadas
+- Use `FastifyPluginAsyncZod` para plugins de rotas
+
+### Formatação (Biome)
+- **Indentação**: 2 espaços
+- **Aspas**: Single quotes (`'`)
+- **Semicolons**: Apenas quando necessário (`asNeeded`)
+- **Line width**: 80 caracteres
+- **Quote style**: Single quotes
+
+### Nomenclatura
+- **Variáveis e funções**: camelCase
+- **Constantes**: camelCase (ou UPPER_SNAKE_CASE se for constante global)
+- **Tipos/Interfaces**: PascalCase
+- **Arquivos**: kebab-case (ex: `list-webhooks.ts`)
+- **Banco de dados**: snake_case (configurado no Drizzle)
+
+### Rotas Fastify
+
+#### Estrutura de Rotas
+- Cada rota deve ser um plugin Fastify (`FastifyPluginAsyncZod`)
+- Exportar como `export const routeName: FastifyPluginAsyncZod = async (app) => { ... }`
+- Registrar rotas no `server.ts` usando `app.register()`
+
+#### Schema de Validação
+- Sempre definir schema completo com Zod para:
+  - `querystring` (query params)
+  - `params` (route params)
+  - `body` (request body)
+  - `response` (status codes e formatos)
+- Usar `createSelectSchema` do `drizzle-zod` para schemas baseados em tabelas
+- Incluir `summary` e `tags` no schema para documentação Swagger
+- Usar `z.coerce` quando necessário para conversão de tipos
+- Validar UUIDs com `z.uuidv7()`
+
+#### Exemplo de Rota:
+```typescript
+export const routeName: FastifyPluginAsyncZod = async (app) => {
+  app.get(
+    '/api/resource',
+    {
+      schema: {
+        summary: 'Description',
+        tags: ['Resource'],
+        querystring: z.object({ ... }),
+        response: {
+          200: z.object({ ... }),
+        },
+      },
+    },
+    async (request, reply) => {
+      // Implementation
+    },
+  )
+}
+```
+
+### Banco de Dados (Drizzle ORM)
+
+#### Schemas
+- Usar `pgTable` para definir tabelas
+- IDs devem usar `uuidv7()` como default function
+- Usar `text()`, `integer()`, `timestamp()`, `jsonb()` conforme necessário
+- Campos opcionais devem usar `.optional()` ou não ter `.notNull()`
+- Timestamps devem usar `.defaultNow()` para `createdAt`
+
+#### Queries
+- Sempre usar `db.select()`, `db.insert()`, `db.update()`, `db.delete()`
+- Usar operadores do Drizzle (`eq`, `lt`, `gt`, `desc`, `asc`, etc.)
+- Para paginação com cursor, usar padrão:
+  ```typescript
+  .limit(limit + 1)
+  const hasMore = result.length > limit
+  const items = hasMore ? result.slice(0, limit) : result
+  const nextCursor = hasMore ? items[items.length - 1].id : null
+  ```
+
+#### Migrations
+- Gerar migrations com `pnpm db:generate`
+- Aplicar com `pnpm db:migrate`
+- Nunca editar migrations existentes manualmente
+
+### Validação com Zod
+
+#### Schemas de Ambiente
+- Validar variáveis de ambiente em `src/env.ts`
+- Usar `z.coerce` para conversão de tipos
+- Fornecer defaults apropriados
+- Usar `z.enum()` para valores específicos
+
+#### Schemas de API
+- Validar todos os inputs (query, params, body)
+- Validar todos os outputs (responses)
+- Usar `.min()`, `.max()`, `.optional()`, `.default()` conforme necessário
+- Para arrays, sempre especificar tipo: `z.array(z.string())`
+
+### Tratamento de Erros
+- Retornar status codes apropriados (200, 201, 404, 400, 500)
+- Sempre incluir mensagens de erro descritivas
+- Para recursos não encontrados: `reply.status(404).send({ message: 'Resource not found' })`
+
+### Imports
+- Organizar imports: externos primeiro, depois internos
+- Agrupar imports relacionados
+- Usar path aliases `@/*` para imports internos
+- Exemplo:
+  ```typescript
+  import { z } from 'zod'
+  import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+  import { db } from '@/db'
+  import { webhooks } from '@/db/schema'
+  ```
+
+### Performance
+- Usar paginação com cursor para listagens grandes
+- Limitar resultados com `.limit()` apropriado
+- Evitar selects desnecessários (usar `.select()` com campos específicos)
+
+### Documentação
+- Incluir `summary` e `tags` em todos os schemas
+- Usar tags consistentes para agrupar rotas relacionadas
+- Exemplo de tags: `['Webhooks']`, `['External']`
+
+### Segurança
+- Validar todos os inputs com Zod
+- Não expor informações sensíveis em respostas
+- Usar CORS apropriadamente (já configurado no projeto)
+
+## Comandos Disponíveis
+- `pnpm dev` - Inicia servidor em modo desenvolvimento
+- `pnpm start` - Inicia servidor em produção
+- `pnpm format` - Formata código com Biome
+- `pnpm db:generate` - Gera migrations
+- `pnpm db:migrate` - Aplica migrations
+- `pnpm db:studio` - Abre Drizzle Studio
+- `pnpm db:seed` - Executa seed do banco
+
+## Boas Práticas Gerais
+1. Sempre validar inputs com Zod antes de processar
+2. Sempre tipar retornos de funções
+3. Usar async/await ao invés de Promises encadeadas
+4. Manter funções pequenas e focadas
+5. Evitar lógica de negócio complexa nas rotas (extrair para serviços se necessário)
+6. Sempre testar rotas após criação/modificação
+7. Manter consistência com o código existente
+8. Usar nomes descritivos para variáveis e funções
+9. Comentar código complexo quando necessário
+10. Seguir o padrão de paginação com cursor para listagens
+
+## Convenções Específicas do Projeto
+- IDs sempre usam UUID v7 (`uuidv7()`)
+- Timestamps usam `timestamp().defaultNow()` para `createdAt`
+- Headers são armazenados como `jsonb` com tipo `Record<string, string>`
+- Query params são armazenados como `jsonb` com tipo `Record<string, string>`
+- Body é armazenado como `text` (string)
+- Rotas de captura usam `app.all()` para aceitar todos os métodos HTTP
+- Rotas de API usam prefixo `/api/`
+- Rotas de captura usam prefixo `/capture/*`

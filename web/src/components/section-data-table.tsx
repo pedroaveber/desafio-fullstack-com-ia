@@ -19,6 +19,7 @@ export function SectionDataTable({
       {...props}
     >
       <table className="w-full">
+        <tbody>
         {data.map((item) => (
           <tr
             key={item.key}
@@ -32,6 +33,7 @@ export function SectionDataTable({
             </td>
           </tr>
         ))}
+        </tbody>
       </table>
     </div>
   )

@@ -1,4 +1,4 @@
-import { useState, useEffect,  type ComponentProps } from 'react'
+import { useState, useEffect, type ComponentProps } from 'react'
 import { twMerge } from 'tailwind-merge'
 import { codeToHtml } from 'shiki'
 
@@ -13,7 +13,6 @@ export function CodeBlock({
   language = 'json',
   ...props
 }: CodeBlockProps) {
-
   const [parsedCode, setParsedCode] = useState('')
 
   useEffect(() => {
@@ -30,7 +29,10 @@ export function CodeBlock({
       )}
       {...props}
     >
-      <div className='[&_pre]:p-4 [&_pre]:text-sm [&_pre]:font-mono [&_pre]:leading-relaxed' dangerouslySetInnerHTML={{ __html: parsedCode }} />
+      <div
+        className="[&_pre]:p-4 [&_pre]:text-sm [&_pre]:font-mono [&_pre]:leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: parsedCode }}
+      />
     </div>
   )
 }

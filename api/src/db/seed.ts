@@ -3,203 +3,235 @@ import { webhooks } from './schema'
 import { sql } from 'drizzle-orm'
 import { faker } from '@faker-js/faker'
 
-const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
-
-const STATUS_CODES = [200, 201, 204, 400, 401, 403, 404, 422, 500, 502, 503] as const
-
-const CONTENT_TYPES = [
-  'application/json',
-  'application/xml',
-  'application/x-www-form-urlencoded',
-  'multipart/form-data',
-  'text/plain',
-  'text/html',
-  'application/javascript',
-  'image/png',
-  'image/jpeg',
+const STRIPE_WEBHOOK_EVENTS = [
+  'payment_intent.succeeded',
+  'payment_intent.payment_failed',
+  'payment_intent.canceled',
+  'charge.succeeded',
+  'charge.failed',
+  'charge.refunded',
+  'customer.created',
+  'customer.updated',
+  'customer.deleted',
+  'subscription.created',
+  'subscription.updated',
+  'subscription.deleted',
+  'invoice.created',
+  'invoice.payment_succeeded',
+  'invoice.payment_failed',
+  'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
+  'checkout.session.async_payment_failed',
+  'account.updated',
+  'balance.available',
+  'coupon.created',
+  'coupon.updated',
+  'coupon.deleted',
+  'product.created',
+  'product.updated',
+  'product.deleted',
+  'price.created',
+  'price.updated',
+  'price.deleted',
 ] as const
 
-function generateHeaders(method: string, contentType?: string): Record<string, string> {
+const STATUS_CODES = [200, 201, 400, 401, 403, 404, 422, 500, 502, 503] as const
+
+function generateStripeSignature(): string {
+  const timestamp = Math.floor(Date.now() / 1000)
+  const signature = faker.string.alphanumeric(64)
+  const v1 = faker.string.alphanumeric(32)
+  return `t=${timestamp},v1=${v1},v0=${signature}`
+}
+
+function generateStripeHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
-    'user-agent': faker.internet.userAgent(),
-    'accept': faker.helpers.arrayElement([
-      'application/json',
-      '*/*',
-      'application/json, text/plain, */*',
-      'text/html, application/xhtml+xml',
-    ]),
-    'accept-language': faker.helpers.arrayElement([
-      'en-US,en;q=0.9',
-      'pt-BR,pt;q=0.9',
-      'es-ES,es;q=0.9',
-      'fr-FR,fr;q=0.9',
-      'de-DE,de;q=0.9',
-    ]),
-    'accept-encoding': 'gzip, deflate, br',
+    'user-agent': 'Stripe/1.0 (+https://stripe.com/docs/webhooks)',
+    'content-type': 'application/json',
+    'stripe-signature': generateStripeSignature(),
+    'accept': '*/*',
+    'accept-encoding': 'gzip, deflate',
     'connection': 'keep-alive',
   }
 
-  if (contentType) {
-    headers['content-type'] = contentType
-  }
-
-  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-    headers['content-length'] = String(faker.number.int({ min: 100, max: 5000 }))
-  }
-
-  // Adicionar headers aleatórios extras
-  if (faker.datatype.boolean()) {
-    headers['authorization'] = faker.helpers.arrayElement([
-      `Bearer ${faker.string.alphanumeric(50)}`,
-      `Basic ${faker.string.alphanumeric(200)}`,
-      `Token ${faker.string.uuid()}`,
-    ])
-  }
-
-  if (faker.datatype.boolean({ probability: 0.3 })) {
-    headers['x-api-key'] = `sk_live_${faker.string.alphanumeric(32)}`
-  }
-
-  if (faker.datatype.boolean({ probability: 0.4 })) {
-    headers['x-request-id'] = faker.string.uuid()
-  }
-
+  // Adicionar headers opcionais do Stripe
   if (faker.datatype.boolean({ probability: 0.3 })) {
     headers['x-forwarded-for'] = faker.internet.ip()
   }
 
   if (faker.datatype.boolean({ probability: 0.2 })) {
-    headers['referer'] = faker.internet.url()
+    headers['x-real-ip'] = faker.internet.ip()
   }
 
   return headers
 }
 
-function generateQueryParams(): Record<string, string> | undefined {
-  if (faker.datatype.boolean({ probability: 0.4 })) {
-    return undefined
-  }
-
-  const params: Record<string, string> = {}
-  const paramCount = faker.number.int({ min: 1, max: 4 })
-
-  for (let i = 0; i < paramCount; i++) {
-    const key = faker.helpers.arrayElement([
-      'page',
-      'limit',
-      'sort',
-      'filter',
-      'search',
-      'status',
-      'type',
-      'category',
-      'q',
-      'order',
-    ])
-    const value = faker.helpers.arrayElement([
-      String(faker.number.int({ min: 1, max: 100 })),
-      faker.helpers.arrayElement(['asc', 'desc', 'active', 'pending', 'completed']),
-      faker.lorem.word(),
-    ])
-    params[key] = value
-  }
-
-  return params
-}
-
-function generatePathname(): string {
+function generateStripePathname(): string {
   const pathPatterns = [
-    `/api/${faker.helpers.arrayElement(['users', 'products', 'orders', 'payments', 'invoices'])}`,
-    `/api/${faker.helpers.arrayElement(['users', 'products', 'orders'])}/${faker.string.uuid()}`,
-    `/api/${faker.helpers.arrayElement(['auth', 'webhooks', 'notifications'])}/${faker.lorem.word()}`,
-    `/api/webhooks/${faker.helpers.arrayElement(['stripe', 'paypal', 'github', 'slack', 'discord'])}`,
-    `/api/${faker.lorem.word()}/${faker.string.uuid()}/${faker.lorem.word()}`,
+    '/webhooks/stripe',
+    '/api/webhooks/stripe',
+    '/api/v1/webhooks/stripe',
+    '/stripe/webhook',
+    '/webhook/stripe',
   ]
 
   return faker.helpers.arrayElement(pathPatterns)
 }
 
-function generateBody(method: string, contentType?: string): string | null {
-  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS' || !contentType) {
-    return null
-  }
+function generateStripeEventBody(eventType: string): string {
+  const eventId = `evt_${faker.string.alphanumeric(24)}`
+  const apiVersion = faker.helpers.arrayElement(['2023-10-16', '2024-06-20', '2024-11-20.acacia'])
+  const created = Math.floor(faker.date.recent().getTime() / 1000)
+  const livemode = faker.datatype.boolean()
+  const pendingWebhooks = faker.number.int({ min: 0, max: 5 })
 
-  if (contentType === 'application/json') {
-    const bodyTypes = [
-      {
-        name: faker.person.fullName(),
-        email: faker.internet.email(),
-        age: faker.number.int({ min: 18, max: 80 }),
+  // Gerar objeto baseado no tipo de evento
+  let dataObject: Record<string, unknown> = {}
+
+  if (eventType.includes('payment_intent')) {
+    dataObject = {
+      id: `pi_${faker.string.alphanumeric(24)}`,
+      object: 'payment_intent',
+      amount: faker.number.int({ min: 1000, max: 1000000 }),
+      currency: faker.finance.currencyCode().toLowerCase(),
+      status: eventType.includes('succeeded')
+        ? 'succeeded'
+        : eventType.includes('failed')
+          ? 'requires_payment_method'
+          : 'canceled',
+      customer: `cus_${faker.string.alphanumeric(24)}`,
+      metadata: {
+        order_id: `ORD-${faker.string.alphanumeric(10).toUpperCase()}`,
+        user_id: faker.string.uuid(),
       },
-      {
-        productId: faker.string.uuid(),
-        quantity: faker.number.int({ min: 1, max: 10 }),
-        price: faker.commerce.price(),
+      created: created,
+    }
+  } else if (eventType.includes('charge')) {
+    dataObject = {
+      id: `ch_${faker.string.alphanumeric(24)}`,
+      object: 'charge',
+      amount: faker.number.int({ min: 1000, max: 1000000 }),
+      currency: faker.finance.currencyCode().toLowerCase(),
+      status: eventType.includes('succeeded')
+        ? 'succeeded'
+        : eventType.includes('failed')
+          ? 'failed'
+          : 'refunded',
+      paid: eventType.includes('succeeded'),
+      payment_intent: `pi_${faker.string.alphanumeric(24)}`,
+      customer: `cus_${faker.string.alphanumeric(24)}`,
+      created: created,
+    }
+  } else if (eventType.includes('customer')) {
+    dataObject = {
+      id: `cus_${faker.string.alphanumeric(24)}`,
+      object: 'customer',
+      email: faker.internet.email(),
+      name: faker.person.fullName(),
+      created: created,
+      metadata: {
+        user_id: faker.string.uuid(),
       },
-      {
-        orderId: `ORD-${faker.string.alphanumeric(10).toUpperCase()}`,
-        status: faker.helpers.arrayElement(['pending', 'completed', 'cancelled']),
-        total: faker.commerce.price(),
-      },
-      {
-        userId: faker.string.uuid(),
-        action: faker.helpers.arrayElement(['login', 'logout', 'register', 'update']),
-        timestamp: faker.date.recent().toISOString(),
-      },
-      {
-        event: faker.helpers.arrayElement([
-          'payment.received',
-          'payment.failed',
-          'order.created',
-          'user.updated',
-        ]),
-        amount: faker.commerce.price(),
-        currency: faker.finance.currencyCode(),
-      },
-      {
-        message: faker.lorem.sentence(),
-        type: faker.helpers.arrayElement(['notification', 'alert', 'info']),
-      },
-      {
-        data: {
-          nested: {
-            value: faker.lorem.word(),
-            count: faker.number.int({ min: 1, max: 100 }),
+    }
+  } else if (eventType.includes('subscription')) {
+    dataObject = {
+      id: `sub_${faker.string.alphanumeric(24)}`,
+      object: 'subscription',
+      status: faker.helpers.arrayElement(['active', 'canceled', 'past_due', 'trialing']),
+      customer: `cus_${faker.string.alphanumeric(24)}`,
+      current_period_start: created,
+      current_period_end: created + 2592000, // 30 dias
+      items: {
+        data: [
+          {
+            id: `si_${faker.string.alphanumeric(24)}`,
+            price: {
+              id: `price_${faker.string.alphanumeric(24)}`,
+              unit_amount: faker.number.int({ min: 1000, max: 50000 }),
+              currency: faker.finance.currencyCode().toLowerCase(),
+            },
           },
-        },
+        ],
       },
-      {
-        title: faker.lorem.sentence(),
-        description: faker.lorem.paragraph(),
-        tags: faker.helpers.arrayElements(['tag1', 'tag2', 'tag3'], { min: 1, max: 3 }),
-      },
-    ]
-    return JSON.stringify(faker.helpers.arrayElement(bodyTypes))
+      created: created,
+    }
+  } else if (eventType.includes('invoice')) {
+    dataObject = {
+      id: `in_${faker.string.alphanumeric(24)}`,
+      object: 'invoice',
+      amount_due: faker.number.int({ min: 1000, max: 1000000 }),
+      amount_paid: eventType.includes('succeeded')
+        ? faker.number.int({ min: 1000, max: 1000000 })
+        : 0,
+      currency: faker.finance.currencyCode().toLowerCase(),
+      status: eventType.includes('succeeded')
+        ? 'paid'
+        : eventType.includes('failed')
+          ? 'open'
+          : 'draft',
+      customer: `cus_${faker.string.alphanumeric(24)}`,
+      subscription: `sub_${faker.string.alphanumeric(24)}`,
+      created: created,
+    }
+  } else if (eventType.includes('checkout.session')) {
+    dataObject = {
+      id: `cs_${faker.string.alphanumeric(24)}`,
+      object: 'checkout.session',
+      payment_status: eventType.includes('succeeded') ? 'paid' : 'unpaid',
+      customer: `cus_${faker.string.alphanumeric(24)}`,
+      amount_total: faker.number.int({ min: 1000, max: 1000000 }),
+      currency: faker.finance.currencyCode().toLowerCase(),
+      created: created,
+    }
+  } else if (eventType.includes('product')) {
+    dataObject = {
+      id: `prod_${faker.string.alphanumeric(24)}`,
+      object: 'product',
+      name: faker.commerce.productName(),
+      description: faker.commerce.productDescription(),
+      active: faker.datatype.boolean(),
+      created: created,
+    }
+  } else if (eventType.includes('price')) {
+    dataObject = {
+      id: `price_${faker.string.alphanumeric(24)}`,
+      object: 'price',
+      active: faker.datatype.boolean(),
+      currency: faker.finance.currencyCode().toLowerCase(),
+      unit_amount: faker.number.int({ min: 1000, max: 1000000 }),
+      product: `prod_${faker.string.alphanumeric(24)}`,
+      created: created,
+    }
+  } else {
+    // Evento genérico
+    dataObject = {
+      id: faker.string.alphanumeric(24),
+      object: 'generic',
+      created: created,
+    }
   }
 
-  if (contentType === 'application/x-www-form-urlencoded') {
-    return `name=${encodeURIComponent(faker.person.fullName())}&email=${encodeURIComponent(faker.internet.email())}&age=${faker.number.int({ min: 18, max: 80 })}`
+  const eventBody = {
+    id: eventId,
+    object: 'event',
+    api_version: apiVersion,
+    created: created,
+    data: {
+      object: dataObject,
+    },
+    livemode: livemode,
+    pending_webhooks: pendingWebhooks,
+    request: {
+      id: `req_${faker.string.alphanumeric(24)}`,
+      idempotency_key: faker.string.uuid(),
+    },
+    type: eventType,
   }
 
-  if (contentType === 'text/plain') {
-    return faker.lorem.paragraph()
-  }
-
-  if (contentType === 'text/html') {
-    return `<html><body><h1>${faker.lorem.sentence()}</h1><p>${faker.lorem.paragraph()}</p></body></html>`
-  }
-
-  if (contentType === 'application/xml') {
-    return `<?xml version="1.0"?><root><item>${faker.lorem.word()}</item><value>${faker.number.int({ min: 1, max: 100 })}</value></root>`
-  }
-
-  return null
+  return JSON.stringify(eventBody, null, 2)
 }
 
-function generateContentLength(body: string | null): number | null {
-  if (!body) {
-    return null
-  }
+function generateContentLength(body: string): number {
   return body.length
 }
 
@@ -217,30 +249,27 @@ async function seed() {
     const batchSize = 50
     const batches = Math.ceil(recordsToCreate / batchSize)
 
-    console.log(`📦 Creating ${recordsToCreate} records in ${batches} batches...`)
+    console.log(`📦 Creating ${recordsToCreate} Stripe webhook records (POST only) in ${batches} batches...`)
 
     for (let batch = 0; batch < batches; batch++) {
       const batchRecords = []
       const recordsInBatch = Math.min(batchSize, recordsToCreate - batch * batchSize)
 
       for (let i = 0; i < recordsInBatch; i++) {
-        const method = faker.helpers.arrayElement(HTTP_METHODS)
-        const contentType =
-          method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
-            ? undefined
-            : faker.helpers.arrayElement(CONTENT_TYPES)
-        const body = generateBody(method, contentType)
+        const eventType = faker.helpers.arrayElement(STRIPE_WEBHOOK_EVENTS)
+        const body = generateStripeEventBody(eventType)
         const contentLength = generateContentLength(body)
+        const headers = generateStripeHeaders()
 
         const record = {
-          method,
-          pathname: generatePathname(),
+          method: 'POST',
+          pathname: generateStripePathname(),
           ip: faker.internet.ip(),
           statusCode: faker.helpers.arrayElement(STATUS_CODES),
-          contentType,
+          contentType: 'application/json',
           contentLength,
-          queryParams: generateQueryParams(),
-          headers: generateHeaders(method, contentType),
+          queryParams: undefined,
+          headers,
           body,
         }
 
@@ -253,7 +282,7 @@ async function seed() {
       )
     }
 
-    console.log(`🎉 Successfully created ${recordsToCreate} webhook records!`)
+    console.log(`🎉 Successfully created ${recordsToCreate} Stripe webhook records!`)
 
     // Verificar contagem final
     const count = await db.select({ count: sql<number>`count(*)` }).from(webhooks)
